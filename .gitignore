@@ -1,0 +1,30 @@
+# Model files (exclude download.sh)
+model/*
+!model/download.sh
+
+# Build directories
+02_cpp/build/
+02_cpp/examples/build/
+02_cpp/install/
+
+# Common build artifacts
+*.o
+*.so
+*.a
+*.exe
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

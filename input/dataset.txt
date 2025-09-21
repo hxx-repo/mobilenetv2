@@ -1,0 +1,3 @@
+/home/xinxin/work/mobilenetv2/input/cat_224x224.jpg
+/home/xinxin/work/mobilenetv2/input/dog_224x224.jpg
+/home/xinxin/work/mobilenetv2/input/fish_224x224.jpeg
