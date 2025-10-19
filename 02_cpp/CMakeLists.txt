@@ -124,6 +124,23 @@ if(NCNN_FOUND)
     add_definitions(-DENABLE_NCNN)
 endif()
 
+# 直接指定依赖库路径 - MNN
+set(MNN_ROOT "/home/xinxin/work/depend_config/mnn/MNN")
+set(MNN_LIB_DIR "/home/xinxin/work/depend_config/mnn/lib")
+if(EXISTS ${MNN_LIB_DIR}/libMNN.so)
+    include_directories(${MNN_ROOT}/include)
+    link_directories(${MNN_LIB_DIR})
+    set(MNN_LIB MNN)
+    message(STATUS "使用MNN: ${MNN_ROOT} (lib路径: ${MNN_LIB_DIR})")
+    list(APPEND BACKEND_SOURCES src/mnn_backend.cpp)
+    list(APPEND BACKEND_LIBS ${MNN_LIB})
+    add_definitions(-DENABLE_MNN)
+    set(MNN_FOUND TRUE)
+else()
+    message(WARNING "未找到MNN，将跳过MNN后端")
+    set(MNN_FOUND FALSE)
+endif()
+
 # 创建动态库
 add_library(mobilenet_inference SHARED
     ${CORE_SOURCES}

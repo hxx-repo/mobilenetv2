@@ -401,6 +401,122 @@ class NCNNBackend(InferenceBackend):
             # NCNN网络会自动管理内存
             self.net = None
 
+class MNNBackend(InferenceBackend):
+    """MNN后端"""
+    
+    def load_model(self):
+        try:
+            import MNN
+            
+            print(f"加载MNN模型: {self.model_path}")
+            
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"模型文件不存在: {self.model_path}")
+            
+            self.MNN = MNN
+            self.interpreter = MNN.Interpreter(self.model_path)
+            self.session = self.interpreter.createSession()
+            def _format_dtype(dtype):
+                mapping = {
+                    getattr(MNN, "Halide_Type_Float", None): "float32",
+                    getattr(MNN, "Halide_Type_Double", None): "float64",
+                    getattr(MNN, "Halide_Type_Int", None): "int32",
+                    getattr(MNN, "Halide_Type_Int64", None): "int64",
+                    getattr(MNN, "Halide_Type_Uint8", None): "uint8",
+                    getattr(MNN, "Halide_Type_Int8", None): "int8"
+                }
+                for key, name in mapping.items():
+                    if key is not None and dtype is key:
+                        return name
+                return str(dtype)
+            
+            inputs_map = self.interpreter.getSessionInputAll(self.session)
+            input_entry = next(iter(inputs_map.items()))
+            self.input_name = input_entry[0]
+            self._input_tensor = input_entry[1]
+            
+            input_shape = list(self._input_tensor.getShape() or [])
+            if not input_shape or any(dim <= 0 for dim in input_shape):
+                input_shape = [1, 3, 224, 224]
+                self.interpreter.resizeTensor(self._input_tensor, input_shape)
+                self.interpreter.resizeSession(self.session)
+            self.input_shape = tuple(input_shape)
+            self.input_dtype = self._input_tensor.getDataType()
+            self.input_dimension = self._input_tensor.getDimensionType()
+            self.input_dtype_name = _format_dtype(self.input_dtype)
+            
+            outputs_map = self.interpreter.getSessionOutputAll(self.session)
+            output_entry = next(iter(outputs_map.items()))
+            self.output_name = output_entry[0]
+            self._output_tensor = output_entry[1]
+            
+            self.output_shape = tuple(self._output_tensor.getShape())
+            self.output_dtype = self._output_tensor.getDataType()
+            self.output_dimension = self._output_tensor.getDimensionType()
+            self.output_dtype_name = _format_dtype(self.output_dtype)
+            
+            print(f"✅ MNN模型加载成功")
+            print(f"   输入名称: {self.input_name}")
+            print(f"   输入形状: {self.input_shape}")
+            print(f"   输入数据类型: {self.input_dtype_name}")
+            print(f"   输出名称: {self.output_name}")
+            print(f"   输出形状: {self.output_shape}")
+            print(f"   输出数据类型: {self.output_dtype_name}")
+            return True
+        
+        except Exception as e:
+            print(f"❌ MNN模型加载失败: {e}")
+            return False
+    
+    def preprocess(self, image_path):
+        """MNN预处理 (CHW格式) - MobileNetV2标准化"""
+        img = Image.open(image_path).convert('RGB').resize((224, 224))
+        img = np.array(img).astype(np.float32)
+        img = (img - 127.5) / 127.5
+        img = np.transpose(img, (2, 0, 1))
+        img = np.expand_dims(img, axis=0)
+        return img
+    
+    def inference(self, input_data):
+        """MNN推理"""
+        try:
+            MNN = self.MNN
+            input_tensor = self._input_tensor
+            
+            input_array = np.ascontiguousarray(input_data.astype(np.float32))
+            tmp_input = MNN.Tensor(self.input_shape, self.input_dtype, input_array, self.input_dimension)
+            input_tensor.copyFrom(tmp_input)
+            
+            self.interpreter.runSession(self.session)
+            
+            host_output = MNN.Tensor(
+                self.output_shape,
+                self.output_dtype,
+                self.output_dimension
+            )
+            self._output_tensor.copyToHostTensor(host_output)
+            output_data = np.array(host_output.getData(), dtype=np.float32)
+            return output_data.reshape(self.output_shape)
+        except Exception as e:
+            raise RuntimeError(f"MNN推理失败: {e}")
+    
+    def postprocess(self, output_data):
+        """MNN后处理：压缩多余维度"""
+        return np.squeeze(output_data)
+    
+    def cleanup(self):
+        """MNN清理资源"""
+        if hasattr(self, 'interpreter'):
+            self.interpreter = None
+        if hasattr(self, 'session'):
+            self.session = None
+        if hasattr(self, '_input_tensor'):
+            self._input_tensor = None
+        if hasattr(self, '_output_tensor'):
+            self._output_tensor = None
+        if hasattr(self, 'MNN'):
+            self.MNN = None
+
 def benchmark_model(backend, image_path, test_runs=20):
     """性能测试"""
     print(f"\n=== 性能测试 ===")
@@ -500,6 +616,8 @@ def main():
     parser.add_argument("--top-k", type=int, default=5, help="显示Top-K结果 (默认: 5)")
     parser.add_argument("--compare", action="store_true", help="对比所有可用模型")
     parser.add_argument("--ncnn-accuracy-warning", action="store_true", help="显示NCNN精度警告")
+    parser.add_argument("--mnn", help="MNN模型路径 (.mnn)")
+    parser.add_argument("--mnn-int8", help="MNN INT8量化模型路径 (.mnn)")
     
     args = parser.parse_args()
     
@@ -557,6 +675,21 @@ def main():
         if ncnn_path and os.path.exists(ncnn_path):
             print(f"\n{emoji} === {name} 测试 ===")
             backend = NCNNBackend(ncnn_path)
+            avg_time, predictions = benchmark_model(backend, args.image, args.runs)
+            if avg_time is not None:
+                results[name] = avg_time
+                all_predictions[name] = predictions
+
+    # 测试MNN各模式
+    mnn_configs = [
+        (args.mnn, "MNN", "🟣"),
+        (args.mnn_int8, "MNN (INT8)", "🟤")
+    ]
+    
+    for mnn_path, name, emoji in mnn_configs:
+        if mnn_path and os.path.exists(mnn_path):
+            print(f"\n{emoji} === {name} 测试 ===")
+            backend = MNNBackend(mnn_path)
             avg_time, predictions = benchmark_model(backend, args.image, args.runs)
             if avg_time is not None:
                 results[name] = avg_time

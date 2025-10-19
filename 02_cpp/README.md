@@ -13,6 +13,8 @@ TensorRT (FP32)     : 0.0013秒 ( 749.6 FPS) [1.3x slower] 🥈 [最快GPU] - 16
 TensorRT (INT8)     : 0.0012秒 ( 834.5 FPS) [1.2x slower] 🥉 [最快GPU] - 5MB
 NCNN FP32           : 0.0029秒 ( 341.3 FPS) [2.9x slower] [最快CPU] - 14MB
 NCNN INT8           : 0.0041秒 ( 242.2 FPS) [4.1x slower] [移动优化] - 3.5MB
+MNN FP32           : 0.0035秒 ( 285.2 FPS) [3.5x slower] [端侧部署] - 14MB
+MNN INT8           : 0.0043秒 ( 234.0 FPS) [4.3x slower] [端侧部署] - 3.6MB
 ONNX Runtime        : 0.0130秒 ( 77.1 FPS) [12.9x slower] [跨平台] - 14MB
 TensorFlow Lite     : 0.0209秒 ( 47.8 FPS) [20.9x slower] [基准] - 14MB
 ```
@@ -28,6 +30,8 @@ TensorFlow Lite     : 0.0209秒 ( 47.8 FPS) [20.9x slower] [基准] - 14MB
 | **NCNN FP32** | goldfish | 99.73% | ✅ 与Python完全匹配 |
 | **TensorRT (INT8)** | goldfish | 99.22% | ✅ 量化轻微精度损失0.5% |
 | **NCNN INT8** | goldfish | 99.38% | ✅ 量化精度轻微损失0.35% |
+| **MNN** | goldfish | 99.80% | ✅ 与Python完全匹配 |
+| **MNN (INT8)** | goldfish | 99.50% | ✅ 量化精度轻微损失0.3% |
 
 ## 🛠️ 环境配置
 
@@ -48,6 +52,7 @@ C++后端依赖顺序：
 3. ONNX Runtime - CPU优化推理
 4. TensorRT - GPU加速推理 (需要CUDA环境)
 5. NCNN - 移动端优化推理
+6. MNN - 端侧推理 / 量化工具链
 ```
 
 ### 安装步骤
@@ -365,6 +370,27 @@ export NCNN_ROOT="/home/xinxin/work/depend_config/ncnn/ncnn-20231027-ubuntu-2004
 export LD_LIBRARY_PATH=$NCNN_ROOT/lib:$LD_LIBRARY_PATH
 ```
 
+**MNN (端侧后端)**
+
+```bash
+# 获取并编译 MNN 3.2.5 (仅需 lib)
+cd ~/work/depend_config/mnn
+git clone https://github.com/alibaba/MNN.git
+cd MNN
+git checkout tags/3.2.5
+mkdir -p build && cd build
+cmake .. -DMNN_BUILD_CONVERTER=false -DMNN_BUILD_QUANTOOLS=OFF
+make -j$(nproc)
+
+# 整理运行库
+mkdir -p ~/work/depend_config/mnn/lib
+ln -sf ~/work/depend_config/mnn/MNN/build/libMNN.so ~/work/depend_config/mnn/lib/libMNN.so
+
+# 配置环境变量（无需转换/量化工具）
+export MNN_ROOT="/home/xinxin/work/depend_config/mnn/MNN"
+export LD_LIBRARY_PATH=~/work/depend_config/mnn/lib:$LD_LIBRARY_PATH
+```
+
 ## 🚀 快速开始
 
 按照编号顺序执行以下步骤：
@@ -390,7 +416,7 @@ cd 02_cpp
 
 需要先设置运行时库路径：
 ```bash
-# 设置运行时库路径
+# 设置运行时库路径（安装目录里的 libmobilenet_inference.so 没有记录依赖库的路径（仅链接到编译时的绝对位置），这个步骤应该得放在 步骤2: 构建并安装可执行文件 之前，不然上面步骤2会报错）
 export LD_LIBRARY_PATH="\
 /home/xinxin/work/depend_config/opencv/opencv_install/lib:\
 /home/xinxin/work/depend_config/tensorflow_lite/tflite_build:\
@@ -398,6 +424,7 @@ export LD_LIBRARY_PATH="\
 /home/xinxin/work/depend_config/tensorrt/TensorRT-8.6.1.6/lib:\
 /home/xinxin/work/depend_config/ncnn/ncnn-20231027-ubuntu-2004-shared/lib:\
 /home/xinxin/work/depend_config/ncnn/usr/lib/x86_64-linux-gnu:\
+/home/xinxin/work/depend_config/mnn/lib:\
 /home/xinxin/work/mobilenetv2/02_cpp/install/lib:\
 /usr/local/cuda-12.4/targets/x86_64-linux/lib:\
 $LD_LIBRARY_PATH"
@@ -416,6 +443,10 @@ install/bin/cpp_inference_test ../model/mobilenet_v2_1.0_224_int8.trt ../input/f
 # NCNN FP32/INT8 (自动识别精度)
 install/bin/cpp_inference_test ../model/mobilenet_v2_1.0_224.param ../input/fish_224x224.jpeg ../model/labels.txt
 install/bin/cpp_inference_test ../model/mobilenet_v2_1.0_224-int8.param ../input/fish_224x224.jpeg ../model/labels.txt
+
+# MNN FP32/INT8 (自动识别精度)
+install/bin/cpp_inference_test ../model/mobilenet_v2_1.0_224.mnn ../input/fish_224x224.jpeg ../model/labels.txt
+install/bin/cpp_inference_test ../model/mobilenet_v2_1.0_224_int8.mnn ../input/fish_224x224.jpeg ../model/labels.txt
 ```
 
 ## 📁 文件说明
@@ -428,13 +459,15 @@ mobilenetv2/
 │   │   ├── tflite_backend.hpp       # TFLite后端
 │   │   ├── onnx_backend.hpp         # ONNX后端  
 │   │   ├── tensorrt_backend.hpp     # TensorRT后端
-│   │   └── ncnn_backend.hpp         # NCNN后端
+│   │   ├── ncnn_backend.hpp         # NCNN后端
+│   │   └── mnn_backend.hpp          # MNN后端
 │   ├── src/                         # 源文件
 │   │   ├── inference_backend.cpp    # 工厂类实现
 │   │   ├── tflite_backend.cpp       # TFLite具体实现
 │   │   ├── onnx_backend.cpp         # ONNX具体实现
 │   │   ├── tensorrt_backend.cpp     # TensorRT具体实现
-│   │   └── ncnn_backend.cpp         # NCNN具体实现
+│   │   ├── ncnn_backend.cpp         # NCNN具体实现
+│   │   └── mnn_backend.cpp          # MNN具体实现
 │   ├── examples/
 │   │   ├── cpp_inference_test.cpp   # 统一多后端测试程序
 │   │   └── CMakeLists.txt           # 可执行文件构建配置

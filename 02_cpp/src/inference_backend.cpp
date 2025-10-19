@@ -11,6 +11,9 @@
 #ifdef ENABLE_NCNN
 #include "ncnn_backend.hpp"
 #endif
+#ifdef ENABLE_MNN
+#include "mnn_backend.hpp"
+#endif
 #include <iostream>
 #include <chrono>
 #include <numeric>
@@ -56,6 +59,15 @@ std::unique_ptr<InferenceBackend> BackendFactory::CreateBackend(BackendType back
             std::cerr << "NCNN支持未编译进此版本" << std::endl;
             return nullptr;
 #endif
+
+        case BackendType::MNN:
+        case BackendType::MNN_INT8:
+#ifdef ENABLE_MNN
+            return std::make_unique<MNNBackend>(model_path);
+#else
+            std::cerr << "MNN支持未编译进此版本" << std::endl;
+            return nullptr;
+#endif
             
         default:
             return nullptr;
@@ -72,6 +84,8 @@ std::string BackendFactory::BackendTypeToString(BackendType backend_type) {
         case BackendType::TENSORRT_INT8: return "TensorRT INT8";
         case BackendType::NCNN:         return "NCNN";
         case BackendType::NCNN_INT8_QUANT:    return "NCNN INT8";
+        case BackendType::MNN:          return "MNN";
+        case BackendType::MNN_INT8:     return "MNN (INT8)";
         default:                        return "Unknown";
     }
 }

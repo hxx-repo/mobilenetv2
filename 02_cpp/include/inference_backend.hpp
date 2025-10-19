@@ -53,7 +53,9 @@ public:
         TENSORRT_FP16,    // TensorRT FP16
         TENSORRT_INT8,    // TensorRT INT8
         NCNN,             // NCNN - 对应NCNNBackend
-        NCNN_INT8_QUANT   // NCNN INT8量化版本 (重命名避免宏冲突)
+        NCNN_INT8_QUANT,  // NCNN INT8量化版本 (重命名避免宏冲突)
+        MNN,              // MNN - 对应MNNBackend
+        MNN_INT8          // MNN INT8量化版本
     };
     
     static std::unique_ptr<InferenceBackend> CreateBackend(BackendType backend_type, const std::string& model_path);

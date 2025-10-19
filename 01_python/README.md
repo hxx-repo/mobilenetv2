@@ -1,6 +1,6 @@
 # MobileNetV2 推理项目
 
-演示完整的深度学习模型转换和性能优化流程：**TFLite → ONNX → TensorRT**/**NCNN**
+演示完整的深度学习模型转换和性能优化流程：**TFLite → ONNX → TensorRT / MNN / NCNN**
 
 ## 📊 性能结果
 
@@ -14,6 +14,8 @@ TensorRT (FP32)     : 0.0016秒 ( 642.3 FPS) [1.1x slower] 🥉 [最快] - 16MB
 ONNX (CPU)          : 0.0017秒 ( 593.0 FPS) [1.2x slower] [最快CPU] - 14MB
 NCNN                : 0.0033秒 ( 300.0 FPS) [2.3x slower] [移动优化] - 14MB
 NCNN (INT8)         : 0.0035秒 ( 287.9 FPS) [2.4x slower] [移动优化] - 3.5MB
+MNN                 : 0.0035秒 ( 285.2 FPS) [2.4x slower] [端侧部署] - 14MB
+MNN (INT8)          : 0.0043秒 ( 234.0 FPS) [3.1x slower] [端侧部署] - 3.6MB
 TensorFlow Lite     : 0.0056秒 ( 177.9 FPS) [4.0x slower] [跨平台] - 14MB
 ```
 
@@ -26,6 +28,8 @@ TensorFlow Lite     : 0.0056秒 ( 177.9 FPS) [4.0x slower] [跨平台] - 14MB
 - **NCNN**：CPU专用，移动端优化，完美精度 (99.7% goldfish 置信度)
 - **TensorRT (INT8)**：GPU加速，最快推理，轻量模型，量化精度轻微损失 (99.5% goldfish 置信度)
 - **NCNN (INT8)**：CPU专用，移动端优化，模型大小最小，量化精度轻微损失 (99.5% goldfish 置信度)
+- **MNN (FP32)**：端侧推理框架，CPU/GPU/NPU 多后端支持 (99.8% goldfish 置信度)
+- **MNN (INT8)**：端侧量化部署，轻量模型 (99.5% goldfish 置信度)
 
 | 框架                | Top-1预测 | 置信度 | 精度状态               |
 | ------------------- | --------- | ------ | ---------------------- |
@@ -34,8 +38,10 @@ TensorFlow Lite     : 0.0056秒 ( 177.9 FPS) [4.0x slower] [跨平台] - 14MB
 | **TensorRT (FP32)** | goldfish  | 99.7%  | ✅ 与TFLite一致         |
 | **TensorRT (FP16)** | goldfish  | 99.7%  | ✅ 与TFLite一致         |
 | **NCNN**            | goldfish  | 99.7%  | ✅ 完全一致             |
+| **MNN**             | goldfish  | 99.7%  | ✅ 完全一致             |
 | **TensorRT (INT8)** | goldfish  | 99.2%  | ✅ 量化轻微精度损失0.5% |
 | **NCNN (INT8)**     | goldfish  | 99.4%  | ✅ 量化精度轻微损失0.3% |
+| **MNN (INT8)**      | goldfish  | 99.5%  | ✅ 量化轻微精度损失0.5% |
 
 ## 🛠️ 环境配置
 
@@ -58,6 +64,10 @@ TensorRT的依赖顺序应该是：
 1. protobuf依赖检查 - 基础依赖，NCNN工具需要这个库才能运行
 2. NCNN库路径检查 - 运行时库路径，工具需要这些.so文件
 3. NCNN工具检查 - 最后检查工具是否可执行
+
+正确的MNN依赖顺序：
+1. MNNConvert 编译/安装 - 模型转换工具
+2. quantized.out / MNNQuantTool - INT8 量化工具
 ```
 
 ### 安装步骤
@@ -76,6 +86,7 @@ pip install -r requirements.txt
 # onnxruntime==1.19.2 - ONNX推理 (CPU优化版)
 # tflite2onnx==0.4.1 - 模型转换
 # pycuda==2025.1.1 - CUDA Python绑定 (仅TensorRT需要) - 最基础的GPU和CUDA环境
+# MNN==3.2.5 - 端侧推理框架 (Python接口)
 pip install ncnn==1.0.20231027 --no-deps # 在安装ncnn时同时锁定所有依赖版本，否则会破坏其它依赖
 
 # 3. 配置TensorRT系统库、Python包、工具
@@ -159,7 +170,29 @@ echo $LD_LIBRARY_PATH
 echo $PATH
 =========================================================================================
 
-# 5. 验证环境
+# 5. 配置MNN工具链 - MNNConvert / quantized.out
+cd ~/work/depend_config/mnn
+# 5.1 从源码编译工具（预编译包不含 MNNConvert / quantized.out）
+git clone https://github.com/alibaba/MNN.git
+cd MNN
+git checkout tags/3.2.5
+mkdir -p build && cd build
+cmake .. -DMNN_BUILD_CONVERTER=true -DMNN_BUILD_QUANTOOLS=ON
+make -j$(nproc)
+# 5.2 导出可执行文件与运行库
+mkdir -p ~/work/depend_config/mnn/bin
+ln -sf ~/work/depend_config/mnn/MNN/build/MNNConvert ~/work/depend_config/mnn/bin/MNNConvert
+ln -sf ~/work/depend_config/mnn/MNN/build/quantized.out ~/work/depend_config/mnn/bin/quantized.out
+export PATH=~/work/depend_config/mnn/bin:$PATH
+mkdir -p ~/work/depend_config/mnn/lib
+ln -sf ~/work/depend_config/mnn/MNN/build/libMNN.so ~/work/depend_config/mnn/lib/libMNN.so
+export LD_LIBRARY_PATH=~/work/depend_config/mnn/lib:$LD_LIBRARY_PATH
+# 验证环境变量
+echo $PATH
+echo $LD_LIBRARY_PATH
+=========================================================================================
+
+# 6. 验证环境
 cd ~/work/mobilenetv2/01_python
 python 01_check_deps.py
 ```
@@ -203,6 +236,12 @@ python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --ncnn
 # 只要NCNN INT8量化 (需要校准数据集：单张图片或图片目录或图片列表文件)
 python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --ncnn-int8 --calibration-dataset ../input/fish_224x224.jpeg
 
+# 只要MNN
+python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --mnn
+
+# 只要MNN INT8量化 (需要校准数据集：单张图片或图片目录或图片列表文件)
+python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --mnn-int8 --calibration-dataset ../input/fish_224x224.jpeg
+
 # 🔧 使用图片列表文件
 # 创建图片列表文件
 cat > ../input/dataset.txt << 'EOF'
@@ -214,7 +253,7 @@ cat > ../input/dataset.txt << 'EOF'
 EOF
 
 # 要所有格式
-python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --onnx --tensorrt-fp32 --tensorrt-fp16 --tensorrt-int8 --ncnn --ncnn-int8 --calibration-dataset ../input/dataset.txt
+python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --onnx --tensorrt-fp32 --tensorrt-fp16 --tensorrt-int8 --ncnn --ncnn-int8 --mnn --mnn-int8 --calibration-dataset ../input/dataset.txt
 ```
 
 **校准数据集说明**：
@@ -224,7 +263,8 @@ python 02_convert_model.py --tflite ../model/mobilenet_v2_1.0_224.tflite --onnx 
 - **图片列表文件**: `--calibration-dataset ../input/dataset.txt` 
 - **支持图片格式**: 图片格式 `.jpg/.png/.bmp/.tiff/.webp`
 - **列表文件特性**: 支持注释行（#开头）、相对路径、空行跳过
-- **数量限制**: TensorRT最多使用50张，NCNN最多使用50张（避免校准时间过长）
+- **数量限制**: TensorRT最多使用50张，NCNN最多使用50张，MNN最多使用100张（避免校准时间过长）
+- **统一校准**: 推荐TensorRT/NCNN/MNN共用同一份校准数据，保持多后端量化精度一致
 - **质量提升**: 多图片校准通常比单图片校准获得更好的量化精度
 
 ### 性能对比测试
@@ -278,6 +318,24 @@ python 03_benchmark_all.py \
     --image ../input/fish_224x224.jpeg \
     --labels ../model/labels.txt
 
+# 测试单独的MNN
+python 03_benchmark_all.py \
+    --mnn ../model/mobilenet_v2_1.0_224.mnn \
+    --image ../input/fish_224x224.jpeg \
+    --labels ../model/labels.txt
+
+# 测试单独的MNN INT8量化
+python 03_benchmark_all.py \
+    --mnn-int8 ../model/mobilenet_v2_1.0_224_int8.mnn \
+    --image ../input/fish_224x224.jpeg \
+    --labels ../model/labels.txt
+
+# 示例性能（RTX 3060 / py310_mobilenetv2 环境）
+```
+MNN (FP32) : ~0.0035 秒 / 285 FPS ，Top-1 goldfish 99.8%
+MNN (INT8) : ~0.0043 秒 / 234 FPS ，Top-1 goldfish 99.5%
+```
+
 # 完整多后端性能对比 (一次运行所有后端)
 python 03_benchmark_all.py \
     --tflite ../model/mobilenet_v2_1.0_224.tflite \
@@ -287,6 +345,8 @@ python 03_benchmark_all.py \
     --tensorrt-int8 ../model/mobilenet_v2_1.0_224_int8.trt \
     --ncnn ../model/mobilenet_v2_1.0_224.param \
     --ncnn-int8 ../model/mobilenet_v2_1.0_224-int8.param \
+    --mnn ../model/mobilenet_v2_1.0_224.mnn \
+    --mnn-int8 ../model/mobilenet_v2_1.0_224_int8.mnn \
     --image ../input/fish_224x224.jpeg \
     --labels ../model/labels.txt
 ```
@@ -360,6 +420,8 @@ mobilenetv2/
 │   ├── mobilenet_v2_1.0_224.bin        # NCNN权重参数文件 (FP32)
 │   ├── mobilenet_v2_1.0_224-int8.param # NCNN网络结构文件 (INT8)
 │   ├── mobilenet_v2_1.0_224-int8.bin   # NCNN权重参数文件 (INT8)
+│   ├── mobilenet_v2_1.0_224.mnn        # MNN模型 (FP32)
+│   ├── mobilenet_v2_1.0_224_int8.mnn   # MNN模型 (INT8)
 │   ├── calibration.cache               # INT8校准缓存
 │   ├── labels.txt                      # ImageNet分类标签
 │   └── download.sh                     # 模型下载脚本
@@ -442,4 +504,3 @@ A: 非常稳定！NCNN的量化工具链很成熟：
 **工程实践经验**：解决版本兼容、环境配置、预处理标准化、量化校准等实际问题
 
 **生产就绪方案**：适合GPU/CPU不同场景的推理优化策略
-

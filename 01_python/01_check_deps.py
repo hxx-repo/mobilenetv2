@@ -201,8 +201,8 @@ def check_dependencies():
         except Exception as e:
             print(f"   ❌ {tool} - {description} (检查失败: {e})")
             tensorrt_issues.append(f"{tool}工具检查失败")
-    
-    # 10. NCNN工具链检查 - 验证CPU移动端推理工具
+
+    # 8. NCNN工具链检查 - 验证CPU移动端推理工具
     print(f"\n=== NCNN工具链检查 ===")
     import subprocess
     import os
@@ -272,7 +272,86 @@ def check_dependencies():
         except Exception as e:
             print(f"   ❌ {tool} - {description} (检查失败: {e})")
             ncnn_issues.append(f"{tool}工具检查失败")
-    
+
+    # 9. MNN工具链检查 - 验证端侧推理能力
+    print(f"\n=== MNN工具链检查 ===")
+    mnn_issues = []
+
+    # 1) 检查MNN Python包
+    print("🔍 检查MNN Python包:")
+    try:
+        import MNN
+        version = getattr(MNN, "__version__", "未知版本")
+        print(f"   ✅ MNN ({version}) - 端侧推理框架")
+        if hasattr(MNN, "Interpreter"):
+            print("       ✅ Interpreter API 可用")
+        else:
+            print("       ⚠️  未检测到Interpreter接口")
+            mnn_issues.append("MNN缺少Interpreter接口")
+    except ImportError:
+        print("   ❌ MNN - 端侧推理框架 (未安装)")
+        missing.append("MNN")
+        mnn_issues.append("MNN未安装")
+    except Exception as e:
+        print(f"   ⚠️  MNN - 功能验证失败: {e}")
+        mnn_issues.append("MNN功能异常")
+
+    # 2) 检查MNN转换工具
+    print("🔍 检查MNN转换工具:")
+    try:
+        result = subprocess.run(['which', 'MNNConvert'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            tool_path = result.stdout.strip()
+            print(f"   ✅ MNNConvert - 模型转换工具")
+            print(f"       路径: {tool_path}")
+        else:
+            print(f"   ⚠️  MNNConvert - 模型转换工具 (未找到)")
+            mnn_issues.append("缺少MNNConvert工具")
+    except Exception as e:
+        print(f"   ❌ MNNConvert - 模型转换工具 (检查失败: {e})")
+        mnn_issues.append("MNNConvert工具检查失败")
+
+    # 3) 检查MNN量化工具
+    print("🔍 检查MNN量化工具:")
+    quant_tools = ['quantized.out', 'MNNQuantTool']
+    quant_tool_path = None
+    for tool in quant_tools:
+        try:
+            result = subprocess.run(['which', tool], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                quant_tool_path = result.stdout.strip()
+                print(f"   ✅ {tool} - MNN量化工具")
+                print(f"       路径: {quant_tool_path}")
+                break
+        except Exception as e:
+            print(f"   ❌ {tool} - MNN量化工具 (检查失败: {e})")
+            mnn_issues.append(f"{tool}工具检查失败")
+            quant_tool_path = None
+            break
+    if quant_tool_path is None:
+        print("   ⚠️  MNN量化工具 (quantized.out / MNNQuantTool) 未找到")
+        mnn_issues.append("缺少MNN量化工具")
+
+    # 4) 检查MNN运行时库
+    print("🔍 检查MNN库路径:")
+    mnn_lib_found = False
+    ld_lib_path = os.environ.get('LD_LIBRARY_PATH', '')
+    if ld_lib_path:
+        for path in ld_lib_path.split(':'):
+            candidate = path.strip()
+            if not candidate:
+                continue
+            lib_path = os.path.join(candidate, 'libMNN.so')
+            if os.path.exists(lib_path):
+                print(f"   ✅ MNN库路径: {candidate}")
+                print(f"       libMNN.so: {lib_path}")
+                mnn_lib_found = True
+                break
+    if not mnn_lib_found:
+        print("   ⚠️  MNN库路径: 未检测到LD_LIBRARY_PATH中的libMNN.so")
+        print(f"       当前路径: {ld_lib_path[:100]}...")
+        mnn_issues.append("MNN库路径未配置")
+
     # 检查结果汇总
     print(f"\n=== 检查结果汇总 ===")
     
@@ -325,6 +404,12 @@ def check_dependencies():
         print(f"   • PyCUDA: {pycuda.VERSION_TEXT}")
     except:
         print(f"   • PyCUDA: 未安装")
+
+    try:
+        import MNN
+        print(f"   • MNN: {MNN.version()}")
+    except:
+        print(f"   • MNN: 未安装")
     
     # 问题汇总
     print("\n🔍 问题汇总:")
@@ -339,8 +424,12 @@ def check_dependencies():
     if ncnn_issues:
         print(f"   ⚠️  NCNN问题: {', '.join(ncnn_issues)}")
         print(f"      影响: CPU移动端优化受限")
+
+    if mnn_issues:
+        print(f"   ⚠️  MNN问题: {', '.join(mnn_issues)}")
+        print(f"      影响: 端侧推理与快速转换功能受限")
     
-    if not missing and not tensorrt_issues and not ncnn_issues:
+    if not missing and not tensorrt_issues and not ncnn_issues and not mnn_issues:
         print(f"   ✅ 未发现问题")
     
     # 最终结果
@@ -353,7 +442,9 @@ def check_dependencies():
             print("⚠️  TensorRT功能受限，GPU加速性能可能下降")
         if ncnn_issues:
             print("⚠️  NCNN功能受限，CPU移动端优化可能不可用")
-        if not tensorrt_issues and not ncnn_issues:
+        if mnn_issues:
+            print("⚠️  MNN功能受限，端侧推理流程可能不可用")
+        if not tensorrt_issues and not ncnn_issues and not mnn_issues:
             print("🎉 所有功能组件完全可用！")
         return True
 
@@ -367,8 +458,11 @@ if __name__ == "__main__":
         print("3. 下载并配置NCNN工具包:")
         print("   export PATH=~/work/depend_config/ncnn/ncnn-20231027-ubuntu-2004-shared/bin:$PATH")
         print("   export LD_LIBRARY_PATH=~/work/depend_config/ncnn/usr/lib/x86_64-linux-gnu:~/work/depend_config/ncnn/ncnn-20231027-ubuntu-2004-shared/lib:$LD_LIBRARY_PATH")
-        print("4. 确保CUDA 12.x + 对应cuDNN版本")
-        print("5. 重新运行检查: python 00_check_deps.py")
+        print("4. 下载并配置MNN工具包 (包含MNNConvert 与量化工具)")
+        print("   export PATH=~/work/depend_config/mnn/bin:$PATH")
+        print("   export LD_LIBRARY_PATH=~/work/depend_config/mnn/MNN/build:$LD_LIBRARY_PATH")
+        print("5. 确保CUDA 12.x + 对应cuDNN版本")
+        print("6. 重新运行检查: python 01_check_deps.py")
         exit(1)
     else:
         print("\n🚀 环境检查通过，可以开始使用！")

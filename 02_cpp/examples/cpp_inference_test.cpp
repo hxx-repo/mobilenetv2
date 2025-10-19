@@ -106,6 +106,12 @@ BackendFactory::BackendType parse_backend_type(const std::string& model_path) {
         } else {
             return BackendFactory::BackendType::NCNN;
         }
+    } else if (model_path.find(".mnn") != std::string::npos) {
+        if (model_path.find("int8") != std::string::npos) {
+            return BackendFactory::BackendType::MNN_INT8;
+        } else {
+            return BackendFactory::BackendType::MNN;
+        }
     }
     
     // 默认尝试TFLite
@@ -121,6 +127,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  ONNX: *.onnx" << std::endl;
         std::cout << "  TensorRT: *.trt" << std::endl;
         std::cout << "  NCNN: *.param" << std::endl;
+        std::cout << "  MNN: *.mnn" << std::endl;
         std::cout << "示例: " << argv[0] << " ../model/mobilenet_v2_1.0_224.tflite ../input/fish_224x224.jpeg ../model/labels.txt" << std::endl;
         return 1;
     }

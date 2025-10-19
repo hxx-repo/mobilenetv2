@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-02. 模型转换脚本：TFLite -> ONNX -> TensorRT/NCNN
+02. 模型转换脚本：TFLite -> ONNX -> TensorRT/MNN/NCNN
 第二步执行：转换模型格式以支持不同推理后端
 运行前确保: python 01_check_deps.py 成功
 """
 
 import argparse
+import json
 import os
-import sys
 import time
 import glob
+import shutil
+import tempfile
+import subprocess
 import numpy as np
 from PIL import Image
 
@@ -529,8 +532,199 @@ def quantize_ncnn_to_int8(ncnn_param_path, ncnn_bin_path, int8_param_path, int8_
         print(f"❌ 量化失败: {e}")
         return False
 
+def convert_onnx_to_mnn(onnx_path, mnn_path):
+    """
+    将ONNX模型转换为MNN格式
+    
+    Args:
+        onnx_path (str): ONNX模型路径
+        mnn_path (str): 输出MNN模型路径
+    
+    Returns:
+        bool: 转换是否成功
+    """
+    print(f"\n=== ONNX -> MNN 转换 ===")
+    print(f"输入文件: {onnx_path}")
+    print(f"输出文件: {mnn_path}")
+    
+    if not os.path.exists(onnx_path):
+        print(f"❌ 错误: ONNX文件不存在: {onnx_path}")
+        return False
+    
+    try:
+        cmd = [
+            "MNNConvert",
+            "-f", "ONNX",
+            "--modelFile", onnx_path,
+            "--MNNModel", mnn_path,
+            "--bizCode", "MNN"
+        ]
+        print("正在转换... (MNNConvert)")
+        start_time = time.time()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        convert_time = time.time() - start_time
+        
+        if result.returncode == 0:
+            if os.path.exists(mnn_path):
+                file_size = os.path.getsize(mnn_path) / (1024 * 1024)
+                print(f"✅ MNN转换成功!")
+                print(f"   转换耗时: {convert_time:.2f}秒")
+                print(f"   模型大小: {file_size:.1f}MB")
+                return True
+            print("❌ 转换失败: 输出文件未生成")
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr:
+                print(result.stderr)
+            return False
+        else:
+            print(f"❌ 转换失败 (返回码 {result.returncode})")
+            if result.stdout:
+                print(f"输出信息: {result.stdout.strip()}")
+            if result.stderr:
+                print(f"错误信息: {result.stderr.strip()}")
+            return False
+        
+    except subprocess.TimeoutExpired:
+        print("❌ 转换超时")
+        return False
+    except FileNotFoundError:
+        print("❌ 错误: 未检测到MNNConvert工具 (请确认已配置PATH)")
+        return False
+    except Exception as e:
+        print(f"❌ 转换失败: {e}")
+        return False
+
+def quantize_mnn_to_int8(mnn_path, int8_mnn_path, calibration_dataset_path):
+    """
+    使用quantized.out/MNNQuantTool对MNN模型进行INT8量化
+    
+    Args:
+        mnn_path (str): FP32 MNN模型路径
+        int8_mnn_path (str): 输出INT8 MNN模型路径
+        calibration_dataset_path (str): 校准数据集路径
+    
+    Returns:
+        bool: 量化是否成功
+    """
+    print(f"\n=== MNN INT8 量化 ===")
+    print(f"输入模型: {mnn_path}")
+    print(f"输出模型: {int8_mnn_path}")
+    print(f"校准数据集: {calibration_dataset_path}")
+    
+    if not os.path.exists(mnn_path):
+        print(f"❌ 错误: MNN模型不存在: {mnn_path}")
+        return False
+    
+    image_paths = get_calibration_images(calibration_dataset_path, max_images=100)
+    if not image_paths:
+        print("❌ 错误: 未找到用于MNN量化的校准图像")
+        return False
+    print(f"📊 MNN量化将使用 {len(image_paths)} 张图片")
+    
+    temp_dir = None
+    config_path = None
+    try:
+        # 步骤1: 复制校准图片到临时目录
+        temp_dir = tempfile.mkdtemp(prefix="mnn_calib_")
+        print("🔄 步骤1: 准备校准图片 (复制到临时目录)")
+        for idx, img_path in enumerate(image_paths):
+            ext = os.path.splitext(img_path)[1].lower()
+            if not ext:
+                ext = ".jpg"
+            target_path = os.path.join(temp_dir, f"image_{idx:04d}{ext}")
+            shutil.copy(img_path, target_path)
+        
+        # 步骤2: 生成量化配置文件
+        config = {
+            "format": "RGB",
+            "mean": [127.5, 127.5, 127.5],
+            "normal": [0.00784314, 0.00784314, 0.00784314],
+            "center_crop_h": 1.0,
+            "center_crop_w": 1.0,
+            "width": 224,
+            "height": 224,
+            "path": temp_dir,
+            "used_sample_num": len(image_paths),
+            "feature_quantize_method": "EMA",
+            "weight_quantize_method": "MAX_ABS",
+            "feature_clamp_value": 127,
+            "weight_clamp_value": 127,
+            "batch_size": min(16, len(image_paths)),
+            "quant_bits": 8,
+            "skip_quant_op_names": [],
+            "input_type": "image",
+            "debug": False
+        }
+        config_path = os.path.join(temp_dir, "imageInputConfig.json")
+        print(f"🔄 步骤2: 生成量化配置 ({config_path})")
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+        
+        # 步骤3: 执行量化
+        quant_tools = ["quantized.out", "MNNQuantTool"]
+        last_not_found = []
+        for tool in quant_tools:
+            cmd = [tool, mnn_path, int8_mnn_path, config_path]
+            print(f"🔄 步骤3: 执行量化 ({tool})")
+            start = time.time()
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            except FileNotFoundError:
+                last_not_found.append(tool)
+                continue
+            quant_time = time.time() - start
+            
+            if result.returncode != 0:
+                print("❌ 量化失败")
+                if result.stdout:
+                    print(f"输出信息: {result.stdout.strip()}")
+                if result.stderr:
+                    print(f"错误信息: {result.stderr.strip()}")
+                return False
+            
+            if os.path.exists(int8_mnn_path):
+                file_size = os.path.getsize(int8_mnn_path) / (1024 * 1024)
+                original_size = os.path.getsize(mnn_path) / (1024 * 1024)
+                compression = (1 - file_size / original_size) * 100 if original_size > 0 else 0
+                print(f"✅ MNN INT8量化成功!")
+                print(f"   量化耗时: {quant_time:.2f}秒")
+                print(f"   模型大小: {file_size:.1f}MB (原始 {original_size:.1f}MB, 压缩 {compression:.1f}%)")
+                
+                # 清理调试用JSON（quantized.out默认生成）
+                extra_json = int8_mnn_path + ".json"
+                if os.path.exists(extra_json):
+                    os.remove(extra_json)
+                
+                return True
+            print("❌ 量化失败: 未生成量化模型文件")
+            if result.stdout:
+                print(f"输出信息: {result.stdout.strip()}")
+            if result.stderr:
+                print(f"错误信息: {result.stderr.strip()}")
+            return False
+        
+        if last_not_found:
+            print("❌ 错误: 未检测到MNN量化工具 (quantized.out / MNNQuantTool)")
+        return False
+        
+    except subprocess.TimeoutExpired:
+        print("❌ 量化超时")
+        return False
+    except Exception as e:
+        print(f"❌ 量化失败: {e}")
+        return False
+    finally:
+        if config_path and os.path.exists(config_path):
+            try:
+                os.remove(config_path)
+            except:
+                pass
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 def main():
-    parser = argparse.ArgumentParser(description="模型转换工具: TFLite -> ONNX -> TensorRT/NCNN")
+    parser = argparse.ArgumentParser(description="模型转换工具: TFLite -> ONNX -> TensorRT/NCNN/MNN")
     parser.add_argument("--tflite", "-t", required=True, help="输入TFLite模型路径")
     parser.add_argument("--onnx", action="store_true", help="生成ONNX模型")
     parser.add_argument("--tensorrt-fp32", action="store_true", help="生成TensorRT FP32引擎")
@@ -538,6 +732,8 @@ def main():
     parser.add_argument("--tensorrt-int8", action="store_true", help="生成TensorRT INT8引擎")
     parser.add_argument("--ncnn", "-n", action="store_true", help="生成NCNN模型")
     parser.add_argument("--ncnn-int8", action="store_true", help="生成NCNN INT8量化模型")
+    parser.add_argument("--mnn", action="store_true", help="生成MNN模型")
+    parser.add_argument("--mnn-int8", action="store_true", help="生成MNN INT8量化模型")
     parser.add_argument("--calibration-dataset", "-c", help="INT8量化校准数据集路径（支持：单个图片文件、图片目录、imagelist.txt文件）")
     
     args = parser.parse_args()
@@ -545,10 +741,19 @@ def main():
     # 生成默认输出路径
     base_name = os.path.splitext(args.tflite)[0]
     onnx_path = f"{base_name}.onnx"
+    ncnn_param_path = None
+    ncnn_bin_path = None
+    mnn_path = f"{base_name}.mnn"
+    
+    # 需求标记
+    need_trt = args.tensorrt_fp32 or args.tensorrt_fp16 or args.tensorrt_int8
+    need_ncnn = args.ncnn or args.ncnn_int8
+    need_mnn = args.mnn or args.mnn_int8
     
     # 检查INT8模式是否提供校准数据集
     if (args.tensorrt_int8 and not args.calibration_dataset) or \
-       (args.ncnn_int8 and not args.calibration_dataset):
+       (args.ncnn_int8 and not args.calibration_dataset) or \
+       (args.mnn_int8 and not args.calibration_dataset):
         print("❌ 错误: INT8量化需要校准数据集")
         print("请使用 --calibration-dataset 参数指定校准数据集路径（图片文件或目录）")
         return 1
@@ -559,12 +764,14 @@ def main():
     if args.tensorrt_fp32: print(f"输出TensorRT FP32: {base_name}_fp32.trt")
     if args.tensorrt_fp16: print(f"输出TensorRT FP16: {base_name}_fp16.trt")
     if args.tensorrt_int8: print(f"输出TensorRT INT8: {base_name}_int8.trt")
-    if args.ncnn: print(f"输出NCNN: {base_name}.param/.bin")
+    if need_ncnn: print(f"输出NCNN: {base_name}.param/.bin")
     if args.ncnn_int8: print(f"输出NCNN INT8: {base_name}-int8.param/.bin")
+    if need_mnn: print(f"输出MNN: {mnn_path}")
+    if args.mnn_int8: print(f"输出MNN INT8: {base_name}_int8.mnn")
     
     
     # 步骤1: TFLite -> ONNX
-    if args.tensorrt_fp32 or args.tensorrt_fp16 or args.tensorrt_int8 or args.ncnn or args.ncnn_int8 or args.onnx:
+    if need_trt or need_ncnn or need_mnn or args.onnx:
         print("\n🔄 步骤1: 转换 TFLite -> ONNX")
         if convert_tflite_to_onnx(args.tflite, onnx_path):
             print(f"   ✅ ONNX: {onnx_path}")
@@ -591,10 +798,7 @@ def main():
             return 1
     
     # 步骤3: ONNX -> NCNN
-    ncnn_param_path = None
-    ncnn_bin_path = None
-    
-    if args.ncnn or args.ncnn_int8:
+    if need_ncnn:
         print("\n🔄 步骤3: 转换 ONNX -> NCNN")
         ncnn_param_path = f"{base_name}.param"
         ncnn_bin_path = f"{base_name}.bin"
@@ -603,9 +807,12 @@ def main():
         else:
             print(f"   ❌ NCNN 生成失败")
             return 1
-    
+
     # 步骤4: NCNN INT8 量化
     if args.ncnn_int8:
+        if not ncnn_param_path or not ncnn_bin_path:
+            print("❌ NCNN INT8 量化失败: 未生成NCNN基础模型")
+            return 1
         print("\n🔄 步骤4: NCNN INT8 量化")
         int8_param_path = f"{base_name}-int8.param"
         int8_bin_path = f"{base_name}-int8.bin"
@@ -615,9 +822,29 @@ def main():
             print(f"   ❌ NCNN INT8 量化失败")
             return 1
     
+    # 步骤5: ONNX -> MNN
+    if need_mnn:
+        print("\n🔄 步骤5: 转换 ONNX -> MNN")
+        if convert_onnx_to_mnn(onnx_path, mnn_path):
+            print(f"   ✅ MNN: {mnn_path}")
+        else:
+            print(f"   ❌ MNN 生成失败")
+            return 1
+    
+    # 步骤6: MNN INT8 量化
+    if args.mnn_int8:
+        print("\n🔄 步骤6: MNN INT8 量化")
+        int8_mnn_path = f"{base_name}_int8.mnn"
+        if quantize_mnn_to_int8(mnn_path, int8_mnn_path, args.calibration_dataset):
+            print(f"   ✅ MNN INT8: {int8_mnn_path}")
+        else:
+            print(f"   ❌ MNN INT8 量化失败")
+            return 1
+    
     # 检查是否指定了任何输出格式
-    if not args.onnx and not args.tensorrt_fp32 and not args.tensorrt_fp16 and not args.tensorrt_int8 and not args.ncnn and not args.ncnn_int8:
-        print("\n错误: 请指定输出格式: --onnx, --tensorrt-fp32, --tensorrt-fp16, --tensorrt-int8, --ncnn, --ncnn-int8")
+    if not args.onnx and not args.tensorrt_fp32 and not args.tensorrt_fp16 and not args.tensorrt_int8 and \
+       not args.ncnn and not args.ncnn_int8 and not args.mnn and not args.mnn_int8:
+        print("\n错误: 请指定输出格式: --onnx, --tensorrt-fp32, --tensorrt-fp16, --tensorrt-int8, --ncnn, --ncnn-int8, --mnn, --mnn-int8")
         return 1
     
     print("\n🎉 转换完成!")

@@ -5,3 +5,4 @@ onnx==1.17.0
 onnxruntime==1.19.2
 tflite2onnx==0.4.1
 pycuda==2025.1.1
+MNN==3.2.5
