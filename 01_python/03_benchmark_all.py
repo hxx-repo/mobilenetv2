@@ -433,26 +433,21 @@ class MNNBackend(InferenceBackend):
             inputs_map = self.interpreter.getSessionInputAll(self.session)
             input_entry = next(iter(inputs_map.items()))
             self.input_name = input_entry[0]
-            self._input_tensor = input_entry[1]
+            self.input_tensor = input_entry[1]
             
-            input_shape = list(self._input_tensor.getShape() or [])
-            if not input_shape or any(dim <= 0 for dim in input_shape):
-                input_shape = [1, 3, 224, 224]
-                self.interpreter.resizeTensor(self._input_tensor, input_shape)
-                self.interpreter.resizeSession(self.session)
-            self.input_shape = tuple(input_shape)
-            self.input_dtype = self._input_tensor.getDataType()
-            self.input_dimension = self._input_tensor.getDimensionType()
+            self.input_shape = tuple(self.input_tensor.getShape())
+            self.input_dtype = self.input_tensor.getDataType()
+            self.input_dimension = self.input_tensor.getDimensionType()
             self.input_dtype_name = _format_dtype(self.input_dtype)
             
             outputs_map = self.interpreter.getSessionOutputAll(self.session)
             output_entry = next(iter(outputs_map.items()))
             self.output_name = output_entry[0]
-            self._output_tensor = output_entry[1]
+            self.output_tensor = output_entry[1]
             
-            self.output_shape = tuple(self._output_tensor.getShape())
-            self.output_dtype = self._output_tensor.getDataType()
-            self.output_dimension = self._output_tensor.getDimensionType()
+            self.output_shape = tuple(self.output_tensor.getShape())
+            self.output_dtype = self.output_tensor.getDataType()
+            self.output_dimension = self.output_tensor.getDimensionType()
             self.output_dtype_name = _format_dtype(self.output_dtype)
             
             print(f"✅ MNN模型加载成功")
@@ -481,7 +476,7 @@ class MNNBackend(InferenceBackend):
         """MNN推理"""
         try:
             MNN = self.MNN
-            input_tensor = self._input_tensor
+            input_tensor = self.input_tensor
             
             input_array = np.ascontiguousarray(input_data.astype(np.float32))
             tmp_input = MNN.Tensor(self.input_shape, self.input_dtype, input_array, self.input_dimension)
@@ -494,7 +489,7 @@ class MNNBackend(InferenceBackend):
                 self.output_dtype,
                 self.output_dimension
             )
-            self._output_tensor.copyToHostTensor(host_output)
+            self.output_tensor.copyToHostTensor(host_output)
             output_data = np.array(host_output.getData(), dtype=np.float32)
             return output_data.reshape(self.output_shape)
         except Exception as e:
@@ -506,15 +501,15 @@ class MNNBackend(InferenceBackend):
     
     def cleanup(self):
         """MNN清理资源"""
-        if hasattr(self, 'interpreter'):
+        if hasattr(self, 'interpreter') and self.interpreter is not None:
             self.interpreter = None
-        if hasattr(self, 'session'):
+        if hasattr(self, 'session') and self.session is not None:
             self.session = None
-        if hasattr(self, '_input_tensor'):
-            self._input_tensor = None
-        if hasattr(self, '_output_tensor'):
-            self._output_tensor = None
-        if hasattr(self, 'MNN'):
+        if hasattr(self, 'input_tensor') and self.input_tensor is not None:
+            self.input_tensor = None
+        if hasattr(self, 'output_tensor') and self.input_tensor is not None:
+            self.output_tensor = None
+        if hasattr(self, 'MNN') and self.MNN is not None:
             self.MNN = None
 
 def benchmark_model(backend, image_path, test_runs=20):

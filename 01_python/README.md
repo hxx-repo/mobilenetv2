@@ -66,8 +66,10 @@ TensorRT的依赖顺序应该是：
 3. NCNN工具检查 - 最后检查工具是否可执行
 
 正确的MNN依赖顺序：
-1. MNNConvert 编译/安装 - 模型转换工具
-2. quantized.out / MNNQuantTool - INT8 量化工具
+1. MNN Python包 - 推理与模型检查
+2. MNN转换工具 - MNNConvert（编译/安装）
+3. quantized.out / MNNQuantTool - INT8量化工具（编译/安装）
+4. MNN库路径检查 - 运行时需要包含 libMNN.so
 ```
 
 ### 安装步骤
@@ -190,7 +192,6 @@ export LD_LIBRARY_PATH=~/work/depend_config/mnn/lib:$LD_LIBRARY_PATH
 # 验证环境变量
 echo $PATH
 echo $LD_LIBRARY_PATH
-=========================================================================================
 
 # 6. 验证环境
 cd ~/work/mobilenetv2/01_python
@@ -330,12 +331,6 @@ python 03_benchmark_all.py \
     --image ../input/fish_224x224.jpeg \
     --labels ../model/labels.txt
 
-# 示例性能（RTX 3060 / py310_mobilenetv2 环境）
-```
-MNN (FP32) : ~0.0035 秒 / 285 FPS ，Top-1 goldfish 99.8%
-MNN (INT8) : ~0.0043 秒 / 234 FPS ，Top-1 goldfish 99.5%
-```
-
 # 完整多后端性能对比 (一次运行所有后端)
 python 03_benchmark_all.py \
     --tflite ../model/mobilenet_v2_1.0_224.tflite \
@@ -350,7 +345,6 @@ python 03_benchmark_all.py \
     --image ../input/fish_224x224.jpeg \
     --labels ../model/labels.txt
 ```
-
 ## 🔥 RKNN推理 - 瑞芯微NPU专用
 
 ### 环境配置要求

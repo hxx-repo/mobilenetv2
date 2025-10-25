@@ -281,7 +281,7 @@ def check_dependencies():
     print("🔍 检查MNN Python包:")
     try:
         import MNN
-        version = getattr(MNN, "__version__", "未知版本")
+        version = MNN.version()
         print(f"   ✅ MNN ({version}) - 端侧推理框架")
         if hasattr(MNN, "Interpreter"):
             print("       ✅ Interpreter API 可用")

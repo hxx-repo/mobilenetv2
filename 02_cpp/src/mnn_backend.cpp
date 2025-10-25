@@ -176,11 +176,11 @@ void MNNBackend::cleanup() {
         interpreter_->releaseSession(session_);
         session_ = nullptr;
     }
-    input_tensor_host_.reset();
-    output_tensor_host_.reset();
-    interpreter_.reset();
+	interpreter_.reset();
     input_tensor_device_ = nullptr;
     output_tensor_device_ = nullptr;
+    input_tensor_host_.reset();
+    output_tensor_host_.reset();
     std::cout << "MNN资源已清理" << std::endl;
 }
 
